@@ -9,34 +9,34 @@ import streamlit as st
 import streamlit_authenticator as stauth
 
 # --- CONFIGURAÇÃO DE AUTENTICAÇÃO ---
-config = st.secrets["credentials"]
+# .to_dict() converte o secrets para um dicionário comum e editável
+credentials = st.secrets["credentials"].to_dict()
 
 authenticator = stauth.Authenticate(
-    config['credentials'],
-    config['cookie']['name'],
-    config['cookie']['key'],
-    config['cookie']['expiry_days']
+    credentials,
+    st.secrets["credentials"]["cookie"]["name"],
+    st.secrets["credentials"]["cookie"]["key"],
+    st.secrets["credentials"]["cookie"]["expiry_days"]
 )
 
-# Renderiza o formulário de login na tela
+# Renderiza a tela de login
 authenticator.login()
 
-# Verifica se o usuário errou as credenciais ou ainda não preencheu
+# Valida as credenciais
 if st.session_state["authentication_status"] is False:
     st.error('Usuário ou senha incorretos.')
-    st.stop()  # Trava a execução e não carrega o resto do aplicativo
+    st.stop()
 
 elif st.session_state["authentication_status"] is None:
     st.warning('Por favor, informe suas credenciais para continuar.')
-    st.stop()  # Trava a execução e não carrega o resto do aplicativo
+    st.stop()
 
-# Se passou pelas verificações acima, o login foi realizado com sucesso!
+# Se autenticado com sucesso
 authenticator.logout('Sair / Logout', 'sidebar')
 st.sidebar.write(f'Bem-vinda, *{st.session_state["name"]}*!')
 
 # =========================================================================
-# O SEU CÓDIGO ATUAL DO APP FICA DAQUI PARA BAIXO (MANTENHA TUDO COMO ESTAVA):
-# Exemplo: importações dos seus módulos, formulário "Dados do paciente", etc.
+# O SEU CÓDIGO DO APP CONTINUA DAQUI PARA BAIXO NORMALMENTE
 # =========================================================================
 
 import config
