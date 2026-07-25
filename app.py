@@ -6,6 +6,38 @@ de geração automática do plano.
 """
 
 import streamlit as st
+import streamlit_authenticator as stauth
+
+# --- CONFIGURAÇÃO DE AUTENTICAÇÃO ---
+config = st.secrets["credentials"]
+
+authenticator = stauth.Authenticate(
+    config['credentials'],
+    config['cookie']['name'],
+    config['cookie']['key'],
+    config['cookie']['expiry_days']
+)
+
+# Renderiza o formulário de login na tela
+authenticator.login()
+
+# Verifica se o usuário errou as credenciais ou ainda não preencheu
+if st.session_state["authentication_status"] is False:
+    st.error('Usuário ou senha incorretos.')
+    st.stop()  # Trava a execução e não carrega o resto do aplicativo
+
+elif st.session_state["authentication_status"] is None:
+    st.warning('Por favor, informe suas credenciais para continuar.')
+    st.stop()  # Trava a execução e não carrega o resto do aplicativo
+
+# Se passou pelas verificações acima, o login foi realizado com sucesso!
+authenticator.logout('Sair / Logout', 'sidebar')
+st.sidebar.write(f'Bem-vinda, *{st.session_state["name"]}*!')
+
+# =========================================================================
+# O SEU CÓDIGO ATUAL DO APP FICA DAQUI PARA BAIXO (MANTENHA TUDO COMO ESTAVA):
+# Exemplo: importações dos seus módulos, formulário "Dados do paciente", etc.
+# =========================================================================
 
 import config
 from assets.styles import get_css
