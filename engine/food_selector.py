@@ -1,347 +1,274 @@
 """
-database/foods_data.py
+engine/food_selector.py
 
-Banco de alimentos estruturado por grupo alimentar.
+Algoritmo determinístico de seleção de alimentos, cálculo de porções e
+formatação da descrição de cada item no padrão clínico de referência
+(quantidade em medida caseira + gramas/ml entre parênteses, com opções
+alternativas equivalentes unidas por "ou").
 
-Cada alimento contém:
-- nome
-- grupo: carboidrato | proteina | gordura | vegetal | fruta | bebida
-- kcal_100g, proteina_100g, carboidrato_100g, gordura_100g (composição por
-  100 g/100 ml, valores de referência da Tabela Brasileira de Composição
-  de Alimentos - TACO/UNICAMP e USDA FoodData Central)
-- porcao_base_g: porção usual de referência, em gramas ou mililitros
-- unidade_medida: "g" ou "ml" (usado apenas na exibição da porção)
-- unidade_nome / unidade_nome_plural: nome da medida caseira de UMA
-  unidade (ex.: "fatia" / "fatias", "colher de sopa" / "colheres de sopa"),
-  usada para expressar a porção calculada de forma prática, no padrão
-  "1,5 fatia (75 g)" em vez de apenas gramas.
-- unidade_peso_g: peso (g ou ml) correspondente a 1 unidade da medida
-  caseira acima. A quantidade de unidades exibida = porção_calculada /
-  unidade_peso_g.
-- restricoes_incompativeis: lista de restrições que EXCLUEM este alimento
-- tags: marcadores adicionais (ex.: "vegano", "integral")
-
-O banco foi projetado para ser facilmente expansível: basta adicionar
-novos dicionários às listas abaixo, sempre preenchendo os campos de unidade.
+Regras de decisão implementadas:
+1) Cada refeição possui uma "estrutura" (config.ESTRUTURA_REFEICAO) que
+   define, por seção (entrada/prato/bebida/principal), quais grupos
+   alimentares devem compor aquela refeição.
+2) Alimentos de papel macro (carboidrato/proteína/gordura) têm a porção
+   conjunta de todos os itens da refeição resolvida por um sistema linear,
+   de modo a atingir simultaneamente as metas de proteína, carboidrato e
+   gordura da refeição (evitando dupla contagem de macronutrientes entre
+   alimentos, ex.: feijão contribuindo tanto proteína quanto carboidrato).
+3) Vegetais e bebidas (config.GRUPOS_PORCAO_FIXA) recebem porção fixa de
+   referência — seu papel nutricional é fibra/micronutrientes/hidratação,
+   não macronutriente principal.
+4) A seleção do alimento específico dentro de cada grupo é determinística:
+   respeita restrições alimentares, prioriza alimentos da lista de
+   preferências do paciente e, para grupos de papel macro, prioriza maior
+   densidade do nutriente-alvo; evita repetir o mesmo alimento no mesmo dia.
+5) Para cada alimento escolhido, o sistema gera até 2 opções alternativas
+   nutricionalmente equivalentes (mesmo grupo, kcal/100g dentro de +-25%),
+   compostas na mesma linha unidas por "ou", como na prática clínica de
+   referência (ex.: "2 fatias de pão de forma (50 g) ou 1 unidade de pão
+   francês (50 g)").
 """
 
-FOODS = [
-    # ---------------------------- CARBOIDRATOS ----------------------------
-    {"nome": "arroz branco cozido", "grupo": "carboidrato", "kcal_100g": 128,
-     "proteina_100g": 2.5, "carboidrato_100g": 28.1, "gordura_100g": 0.2,
-     "porcao_base_g": 100, "unidade_medida": "g",
-     "unidade_nome": "colher de servir", "unidade_nome_plural": "colheres de servir", "unidade_peso_g": 50,
-     "restricoes_incompativeis": [], "tags": ["vegano"]},
-    {"nome": "arroz integral cozido", "grupo": "carboidrato", "kcal_100g": 124,
-     "proteina_100g": 2.6, "carboidrato_100g": 25.8, "gordura_100g": 1.0,
-     "porcao_base_g": 100, "unidade_medida": "g",
-     "unidade_nome": "colher de servir", "unidade_nome_plural": "colheres de servir", "unidade_peso_g": 50,
-     "restricoes_incompativeis": [], "tags": ["vegano", "integral"]},
-    {"nome": "batata-doce cozida", "grupo": "carboidrato", "kcal_100g": 77,
-     "proteina_100g": 0.6, "carboidrato_100g": 18.4, "gordura_100g": 0.1,
-     "porcao_base_g": 150, "unidade_medida": "g",
-     "unidade_nome": "unidade média", "unidade_nome_plural": "unidades médias", "unidade_peso_g": 150,
-     "restricoes_incompativeis": [], "tags": ["vegano"]},
-    {"nome": "batata inglesa cozida", "grupo": "carboidrato", "kcal_100g": 52,
-     "proteina_100g": 1.2, "carboidrato_100g": 11.9, "gordura_100g": 0.1,
-     "porcao_base_g": 150, "unidade_medida": "g",
-     "unidade_nome": "unidade média", "unidade_nome_plural": "unidades médias", "unidade_peso_g": 150,
-     "restricoes_incompativeis": [], "tags": ["vegano"]},
-    {"nome": "mandioca cozida", "grupo": "carboidrato", "kcal_100g": 125,
-     "proteina_100g": 0.6, "carboidrato_100g": 30.1, "gordura_100g": 0.3,
-     "porcao_base_g": 100, "unidade_medida": "g",
-     "unidade_nome": "pedaço médio", "unidade_nome_plural": "pedaços médios", "unidade_peso_g": 50,
-     "restricoes_incompativeis": [], "tags": ["vegano"]},
-    {"nome": "pão integral", "grupo": "carboidrato", "kcal_100g": 253,
-     "proteina_100g": 9.4, "carboidrato_100g": 49.9, "gordura_100g": 3.3,
-     "porcao_base_g": 50, "unidade_medida": "g",
-     "unidade_nome": "fatia", "unidade_nome_plural": "fatias", "unidade_peso_g": 25,
-     "restricoes_incompativeis": ["sem_gluten"], "tags": ["integral"]},
-    {"nome": "pão francês", "grupo": "carboidrato", "kcal_100g": 300,
-     "proteina_100g": 8.0, "carboidrato_100g": 58.6, "gordura_100g": 3.1,
-     "porcao_base_g": 50, "unidade_medida": "g",
-     "unidade_nome": "unidade", "unidade_nome_plural": "unidades", "unidade_peso_g": 50,
-     "restricoes_incompativeis": ["sem_gluten"], "tags": []},
-    {"nome": "aveia em flocos", "grupo": "carboidrato", "kcal_100g": 394,
-     "proteina_100g": 13.9, "carboidrato_100g": 67.0, "gordura_100g": 8.5,
-     "porcao_base_g": 30, "unidade_medida": "g",
-     "unidade_nome": "colher de sopa", "unidade_nome_plural": "colheres de sopa", "unidade_peso_g": 10,
-     "restricoes_incompativeis": [], "tags": ["vegano", "integral"]},
-    {"nome": "tapioca (goma hidratada)", "grupo": "carboidrato", "kcal_100g": 240,
-     "proteina_100g": 0.2, "carboidrato_100g": 59.0, "gordura_100g": 0.0,
-     "porcao_base_g": 60, "unidade_medida": "g",
-     "unidade_nome": "unidade média", "unidade_nome_plural": "unidades médias", "unidade_peso_g": 60,
-     "restricoes_incompativeis": [], "tags": ["vegano"]},
-    {"nome": "macarrão integral cozido", "grupo": "carboidrato", "kcal_100g": 124,
-     "proteina_100g": 5.3, "carboidrato_100g": 25.0, "gordura_100g": 0.9,
-     "porcao_base_g": 100, "unidade_medida": "g",
-     "unidade_nome": "escumadeira", "unidade_nome_plural": "escumadeiras", "unidade_peso_g": 100,
-     "restricoes_incompativeis": ["sem_gluten"], "tags": ["integral"]},
-    {"nome": "quinoa cozida", "grupo": "carboidrato", "kcal_100g": 120,
-     "proteina_100g": 4.4, "carboidrato_100g": 21.3, "gordura_100g": 1.9,
-     "porcao_base_g": 100, "unidade_medida": "g",
-     "unidade_nome": "colher de sopa", "unidade_nome_plural": "colheres de sopa", "unidade_peso_g": 25,
-     "restricoes_incompativeis": [], "tags": ["vegano"]},
-    {"nome": "cuscuz de milho cozido", "grupo": "carboidrato", "kcal_100g": 112,
-     "proteina_100g": 2.1, "carboidrato_100g": 25.3, "gordura_100g": 0.3,
-     "porcao_base_g": 100, "unidade_medida": "g",
-     "unidade_nome": "fatia média", "unidade_nome_plural": "fatias médias", "unidade_peso_g": 100,
-     "restricoes_incompativeis": [], "tags": ["vegano"]},
+import numpy as np
 
-    # ------------------------------ PROTEÍNAS ------------------------------
-    {"nome": "peito de frango grelhado", "grupo": "proteina", "kcal_100g": 159,
-     "proteina_100g": 32.0, "carboidrato_100g": 0.0, "gordura_100g": 2.5,
-     "porcao_base_g": 120, "unidade_medida": "g",
-     "unidade_nome": "filé médio", "unidade_nome_plural": "filés médios", "unidade_peso_g": 100,
-     "restricoes_incompativeis": ["vegetariano", "vegano"], "tags": []},
-    {"nome": "patinho moído grelhado", "grupo": "proteina", "kcal_100g": 172,
-     "proteina_100g": 28.0, "carboidrato_100g": 0.0, "gordura_100g": 6.0,
-     "porcao_base_g": 120, "unidade_medida": "g",
-     "unidade_nome": "colher de sopa cheia", "unidade_nome_plural": "colheres de sopa cheias", "unidade_peso_g": 30,
-     "restricoes_incompativeis": ["vegetariano", "vegano"], "tags": []},
-    {"nome": "tilápia grelhada", "grupo": "proteina", "kcal_100g": 128,
-     "proteina_100g": 26.0, "carboidrato_100g": 0.0, "gordura_100g": 2.7,
-     "porcao_base_g": 120, "unidade_medida": "g",
-     "unidade_nome": "filé médio", "unidade_nome_plural": "filés médios", "unidade_peso_g": 100,
-     "restricoes_incompativeis": ["vegetariano", "vegano", "sem_frutos_do_mar"], "tags": []},
-    {"nome": "ovo cozido", "grupo": "proteina", "kcal_100g": 155,
-     "proteina_100g": 13.0, "carboidrato_100g": 1.1, "gordura_100g": 10.6,
-     "porcao_base_g": 100, "unidade_medida": "g",
-     "unidade_nome": "unidade", "unidade_nome_plural": "unidades", "unidade_peso_g": 50,
-     "restricoes_incompativeis": ["vegano", "sem_ovo"], "tags": ["vegetariano"]},
-    {"nome": "tofu grelhado", "grupo": "proteina", "kcal_100g": 145,
-     "proteina_100g": 15.8, "carboidrato_100g": 2.3, "gordura_100g": 8.7,
-     "porcao_base_g": 120, "unidade_medida": "g",
-     "unidade_nome": "fatia", "unidade_nome_plural": "fatias", "unidade_peso_g": 30,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "grão-de-bico cozido", "grupo": "proteina", "kcal_100g": 164,
-     "proteina_100g": 8.9, "carboidrato_100g": 27.4, "gordura_100g": 2.6,
-     "porcao_base_g": 120, "unidade_medida": "g",
-     "unidade_nome": "colher de sopa", "unidade_nome_plural": "colheres de sopa", "unidade_peso_g": 30,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "lentilha cozida", "grupo": "proteina", "kcal_100g": 116,
-     "proteina_100g": 9.0, "carboidrato_100g": 20.1, "gordura_100g": 0.4,
-     "porcao_base_g": 120, "unidade_medida": "g",
-     "unidade_nome": "colher de sopa", "unidade_nome_plural": "colheres de sopa", "unidade_peso_g": 30,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "feijão-preto cozido", "grupo": "proteina", "kcal_100g": 77,
-     "proteina_100g": 4.5, "carboidrato_100g": 14.0, "gordura_100g": 0.5,
-     "porcao_base_g": 120, "unidade_medida": "g",
-     "unidade_nome": "concha média", "unidade_nome_plural": "conchas médias", "unidade_peso_g": 60,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "whey protein (isolado)", "grupo": "proteina", "kcal_100g": 380,
-     "proteina_100g": 80.0, "carboidrato_100g": 5.0, "gordura_100g": 3.0,
-     "porcao_base_g": 30, "unidade_medida": "g",
-     "unidade_nome": "scoop", "unidade_nome_plural": "scoops", "unidade_peso_g": 30,
-     "restricoes_incompativeis": ["vegano", "sem_lactose"], "tags": ["vegetariano"]},
-    {"nome": "iogurte natural desnatado", "grupo": "proteina", "kcal_100g": 41,
-     "proteina_100g": 4.0, "carboidrato_100g": 5.9, "gordura_100g": 0.2,
-     "porcao_base_g": 170, "unidade_medida": "g",
-     "unidade_nome": "pote", "unidade_nome_plural": "potes", "unidade_peso_g": 170,
-     "restricoes_incompativeis": ["vegano", "sem_lactose"], "tags": ["vegetariano"]},
-    {"nome": "queijo cottage", "grupo": "proteina", "kcal_100g": 98,
-     "proteina_100g": 11.1, "carboidrato_100g": 3.4, "gordura_100g": 4.3,
-     "porcao_base_g": 100, "unidade_medida": "g",
-     "unidade_nome": "colher de sopa", "unidade_nome_plural": "colheres de sopa", "unidade_peso_g": 25,
-     "restricoes_incompativeis": ["vegano", "sem_lactose"], "tags": ["vegetariano"]},
-    {"nome": "atum em lata (água)", "grupo": "proteina", "kcal_100g": 116,
-     "proteina_100g": 25.5, "carboidrato_100g": 0.0, "gordura_100g": 1.0,
-     "porcao_base_g": 100, "unidade_medida": "g",
-     "unidade_nome": "lata pequena", "unidade_nome_plural": "latas pequenas", "unidade_peso_g": 100,
-     "restricoes_incompativeis": ["vegetariano", "vegano", "sem_frutos_do_mar"], "tags": []},
+import config
+from database.foods_data import filtrar_alimentos
 
-    # ------------------------------ GORDURAS -------------------------------
-    {"nome": "azeite de oliva extravirgem", "grupo": "gordura", "kcal_100g": 884,
-     "proteina_100g": 0.0, "carboidrato_100g": 0.0, "gordura_100g": 100.0,
-     "porcao_base_g": 8, "unidade_medida": "ml",
-     "unidade_nome": "colher de sopa", "unidade_nome_plural": "colheres de sopa", "unidade_peso_g": 8,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "abacate", "grupo": "gordura", "kcal_100g": 96,
-     "proteina_100g": 1.2, "carboidrato_100g": 6.0, "gordura_100g": 8.4,
-     "porcao_base_g": 80, "unidade_medida": "g",
-     "unidade_nome": "colher de sopa", "unidade_nome_plural": "colheres de sopa", "unidade_peso_g": 27,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "castanha-do-pará", "grupo": "gordura", "kcal_100g": 656,
-     "proteina_100g": 14.3, "carboidrato_100g": 12.3, "gordura_100g": 66.4,
-     "porcao_base_g": 15, "unidade_medida": "g",
-     "unidade_nome": "unidade", "unidade_nome_plural": "unidades", "unidade_peso_g": 7.5,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "amêndoas", "grupo": "gordura", "kcal_100g": 579,
-     "proteina_100g": 21.2, "carboidrato_100g": 21.6, "gordura_100g": 49.9,
-     "porcao_base_g": 15, "unidade_medida": "g",
-     "unidade_nome": "unidade", "unidade_nome_plural": "unidades", "unidade_peso_g": 1.5,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "pasta de amendoim integral", "grupo": "gordura", "kcal_100g": 588,
-     "proteina_100g": 25.1, "carboidrato_100g": 20.0, "gordura_100g": 50.0,
-     "porcao_base_g": 15, "unidade_medida": "g",
-     "unidade_nome": "colher de sopa", "unidade_nome_plural": "colheres de sopa", "unidade_peso_g": 15,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "semente de chia", "grupo": "gordura", "kcal_100g": 486,
-     "proteina_100g": 16.5, "carboidrato_100g": 42.1, "gordura_100g": 30.7,
-     "porcao_base_g": 12, "unidade_medida": "g",
-     "unidade_nome": "colher de sopa", "unidade_nome_plural": "colheres de sopa", "unidade_peso_g": 12,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
+NUTRIENTE_ALVO_POR_GRUPO = {
+    "carboidrato": "carboidrato_100g",
+    "proteina": "proteina_100g",
+    "gordura": "gordura_100g",
+}
 
-    # ------------------------------ VEGETAIS -------------------------------
-    {"nome": "brócolis cozido", "grupo": "vegetal", "kcal_100g": 25,
-     "proteina_100g": 2.1, "carboidrato_100g": 4.0, "gordura_100g": 0.3,
-     "porcao_base_g": 100, "unidade_medida": "g",
-     "unidade_nome": "colher de sopa", "unidade_nome_plural": "colheres de sopa", "unidade_peso_g": 25,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "cenoura crua ralada", "grupo": "vegetal", "kcal_100g": 41,
-     "proteina_100g": 0.9, "carboidrato_100g": 9.6, "gordura_100g": 0.2,
-     "porcao_base_g": 80, "unidade_medida": "g",
-     "unidade_nome": "colher de sopa", "unidade_nome_plural": "colheres de sopa", "unidade_peso_g": 27,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "alface", "grupo": "vegetal", "kcal_100g": 15,
-     "proteina_100g": 1.4, "carboidrato_100g": 2.4, "gordura_100g": 0.2,
-     "porcao_base_g": 60, "unidade_medida": "g",
-     "unidade_nome": "folha", "unidade_nome_plural": "folhas", "unidade_peso_g": 15,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "tomate", "grupo": "vegetal", "kcal_100g": 18,
-     "proteina_100g": 0.9, "carboidrato_100g": 3.9, "gordura_100g": 0.2,
-     "porcao_base_g": 90, "unidade_medida": "g",
-     "unidade_nome": "unidade média", "unidade_nome_plural": "unidades médias", "unidade_peso_g": 90,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "abobrinha refogada", "grupo": "vegetal", "kcal_100g": 21,
-     "proteina_100g": 1.3, "carboidrato_100g": 4.0, "gordura_100g": 0.3,
-     "porcao_base_g": 100, "unidade_medida": "g",
-     "unidade_nome": "colher de sopa", "unidade_nome_plural": "colheres de sopa", "unidade_peso_g": 25,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "couve refogada", "grupo": "vegetal", "kcal_100g": 33,
-     "proteina_100g": 2.9, "carboidrato_100g": 4.3, "gordura_100g": 0.7,
-     "porcao_base_g": 80, "unidade_medida": "g",
-     "unidade_nome": "colher de sopa", "unidade_nome_plural": "colheres de sopa", "unidade_peso_g": 27,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "pepino em fatias", "grupo": "vegetal", "kcal_100g": 12,
-     "proteina_100g": 0.7, "carboidrato_100g": 2.0, "gordura_100g": 0.1,
-     "porcao_base_g": 90, "unidade_medida": "g",
-     "unidade_nome": "fatia", "unidade_nome_plural": "fatias", "unidade_peso_g": 15,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "beterraba cozida", "grupo": "vegetal", "kcal_100g": 32,
-     "proteina_100g": 1.3, "carboidrato_100g": 7.0, "gordura_100g": 0.1,
-     "porcao_base_g": 80, "unidade_medida": "g",
-     "unidade_nome": "fatia", "unidade_nome_plural": "fatias", "unidade_peso_g": 27,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-
-    # ------------------------------- FRUTAS --------------------------------
-    {"nome": "banana", "grupo": "fruta", "kcal_100g": 89,
-     "proteina_100g": 1.1, "carboidrato_100g": 22.8, "gordura_100g": 0.3,
-     "porcao_base_g": 100, "unidade_medida": "g",
-     "unidade_nome": "unidade média", "unidade_nome_plural": "unidades médias", "unidade_peso_g": 100,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "maçã", "grupo": "fruta", "kcal_100g": 52,
-     "proteina_100g": 0.3, "carboidrato_100g": 13.8, "gordura_100g": 0.2,
-     "porcao_base_g": 130, "unidade_medida": "g",
-     "unidade_nome": "unidade média", "unidade_nome_plural": "unidades médias", "unidade_peso_g": 130,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "mamão papaya", "grupo": "fruta", "kcal_100g": 43,
-     "proteina_100g": 0.5, "carboidrato_100g": 10.8, "gordura_100g": 0.3,
-     "porcao_base_g": 150, "unidade_medida": "g",
-     "unidade_nome": "fatia média", "unidade_nome_plural": "fatias médias", "unidade_peso_g": 150,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "morango", "grupo": "fruta", "kcal_100g": 32,
-     "proteina_100g": 0.7, "carboidrato_100g": 7.7, "gordura_100g": 0.3,
-     "porcao_base_g": 120, "unidade_medida": "g",
-     "unidade_nome": "unidade média", "unidade_nome_plural": "unidades médias", "unidade_peso_g": 15,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "laranja", "grupo": "fruta", "kcal_100g": 47,
-     "proteina_100g": 0.9, "carboidrato_100g": 11.8, "gordura_100g": 0.1,
-     "porcao_base_g": 150, "unidade_medida": "g",
-     "unidade_nome": "unidade média", "unidade_nome_plural": "unidades médias", "unidade_peso_g": 150,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "abacaxi em fatias", "grupo": "fruta", "kcal_100g": 50,
-     "proteina_100g": 0.5, "carboidrato_100g": 13.1, "gordura_100g": 0.1,
-     "porcao_base_g": 130, "unidade_medida": "g",
-     "unidade_nome": "fatia", "unidade_nome_plural": "fatias", "unidade_peso_g": 65,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "uva", "grupo": "fruta", "kcal_100g": 69,
-     "proteina_100g": 0.7, "carboidrato_100g": 18.1, "gordura_100g": 0.2,
-     "porcao_base_g": 100, "unidade_medida": "g",
-     "unidade_nome": "cacho pequeno", "unidade_nome_plural": "cachos pequenos", "unidade_peso_g": 100,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "kiwi", "grupo": "fruta", "kcal_100g": 61,
-     "proteina_100g": 1.1, "carboidrato_100g": 14.7, "gordura_100g": 0.5,
-     "porcao_base_g": 140, "unidade_medida": "g",
-     "unidade_nome": "unidade", "unidade_nome_plural": "unidades", "unidade_peso_g": 70,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "melancia em fatia", "grupo": "fruta", "kcal_100g": 30,
-     "proteina_100g": 0.6, "carboidrato_100g": 7.6, "gordura_100g": 0.2,
-     "porcao_base_g": 200, "unidade_medida": "g",
-     "unidade_nome": "fatia grande", "unidade_nome_plural": "fatias grandes", "unidade_peso_g": 200,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "pera", "grupo": "fruta", "kcal_100g": 57,
-     "proteina_100g": 0.4, "carboidrato_100g": 15.2, "gordura_100g": 0.1,
-     "porcao_base_g": 130, "unidade_medida": "g",
-     "unidade_nome": "unidade média", "unidade_nome_plural": "unidades médias", "unidade_peso_g": 130,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-
-    # ------------------------------- BEBIDAS -------------------------------
-    # Acompanham Almoço/Jantar em porção fixa de referência (papel de
-    # hidratação/acompanhamento, não de macronutriente principal).
-    {"nome": "suco de uva integral", "grupo": "bebida", "kcal_100g": 60,
-     "proteina_100g": 0.1, "carboidrato_100g": 15.0, "gordura_100g": 0.0,
-     "porcao_base_g": 200, "unidade_medida": "ml",
-     "unidade_nome": "copo", "unidade_nome_plural": "copos", "unidade_peso_g": 200,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "suco de laranja natural", "grupo": "bebida", "kcal_100g": 37,
-     "proteina_100g": 0.5, "carboidrato_100g": 8.9, "gordura_100g": 0.1,
-     "porcao_base_g": 200, "unidade_medida": "ml",
-     "unidade_nome": "copo", "unidade_nome_plural": "copos", "unidade_peso_g": 200,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "água de coco", "grupo": "bebida", "kcal_100g": 22,
-     "proteina_100g": 0.1, "carboidrato_100g": 5.3, "gordura_100g": 0.1,
-     "porcao_base_g": 200, "unidade_medida": "ml",
-     "unidade_nome": "copo", "unidade_nome_plural": "copos", "unidade_peso_g": 200,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-    {"nome": "suco de abacaxi natural", "grupo": "bebida", "kcal_100g": 46,
-     "proteina_100g": 0.3, "carboidrato_100g": 11.3, "gordura_100g": 0.1,
-     "porcao_base_g": 200, "unidade_medida": "ml",
-     "unidade_nome": "copo", "unidade_nome_plural": "copos", "unidade_peso_g": 200,
-     "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
-]
 
 # ---------------------------------------------------------------------------
-# CONTEXTO DE USO: em quais tipos de refeição cada alimento é
-# tradicionalmente adequado. Evita, por exemplo, que aveia em flocos ou
-# castanhas (tipicamente de café da manhã/lanche) sejam escaladas a
-# porções grandes para compor o prato principal do almoço/jantar, e que
-# arroz/batata sejam usados como "lanche". Proteínas, vegetais, frutas e
-# bebidas são adequados em qualquer contexto.
-_CARBOIDRATOS_SO_LANCHE = {"pão integral", "pão francês", "aveia em flocos", "tapioca (goma hidratada)"}
-_CARBOIDRATOS_AMBOS = {"batata-doce cozida", "quinoa cozida", "cuscuz de milho cozido"}
-_GORDURAS_SO_LANCHE = {"castanha-do-pará", "amêndoas", "pasta de amendoim integral", "semente de chia"}
-_GORDURAS_AMBOS = {"azeite de oliva extravirgem", "abacate"}
+# FORMATAÇÃO DE QUANTIDADE E MEDIDA CASEIRA
+# ---------------------------------------------------------------------------
 
-for _alimento in FOODS:
-    if _alimento["grupo"] in ("proteina", "vegetal", "fruta", "bebida"):
-        _alimento["contextos"] = ["refeicao_principal", "lanche"]
-    elif _alimento["nome"] in _CARBOIDRATOS_SO_LANCHE:
-        _alimento["contextos"] = ["lanche"]
-    elif _alimento["nome"] in _CARBOIDRATOS_AMBOS or _alimento["nome"] in _GORDURAS_AMBOS:
-        _alimento["contextos"] = ["refeicao_principal", "lanche"]
-    elif _alimento["nome"] in _GORDURAS_SO_LANCHE:
-        _alimento["contextos"] = ["lanche"]
-    else:
-        # demais carboidratos (arroz, batata inglesa, mandioca, macarrão) e
-        # a gordura não listada acima -> refeição principal
-        _alimento["contextos"] = ["refeicao_principal"]
+def _formatar_quantidade(valor: float) -> str:
+    """Arredonda para o múltiplo de 0,5 mais próximo (mínimo 0,5) e formata
+    no padrão brasileiro (vírgula decimal), sem casas decimais desnecessárias."""
+    valor = max(0.5, round(valor * 2) / 2)
+    if valor == int(valor):
+        return str(int(valor))
+    return str(valor).replace(".", ",")
 
 
-def filtrar_alimentos(grupo: str, restricoes: list, contexto: str = None) -> list:
-    """
-    Retorna todos os alimentos de um determinado grupo que sejam
-    compatíveis com a lista de restrições do paciente e, se informado,
-    com o contexto da refeição ("refeicao_principal" ou "lanche").
-    """
-    resultado = []
-    for alimento in FOODS:
-        if alimento["grupo"] != grupo:
+def formatar_alimento(alimento: dict, gramas: float) -> str:
+    """Formata um alimento e sua porção no padrão 'quantidade medida_caseira
+    de nome (gramas/ml)', ex.: '2 fatias de pão de forma (50 g)'."""
+    unidade_peso = alimento.get("unidade_peso_g") or alimento["porcao_base_g"]
+    quantidade = gramas / unidade_peso if unidade_peso else 1
+    texto_qtd = _formatar_quantidade(quantidade)
+    valor_num = float(texto_qtd.replace(",", "."))
+    unidade_nome = alimento["unidade_nome"] if valor_num <= 1 else alimento["unidade_nome_plural"]
+    unidade_medida = alimento.get("unidade_medida", "g")
+    return f"{texto_qtd} {unidade_nome} de {alimento['nome']} ({gramas:.0f} {unidade_medida})"
+
+
+# ---------------------------------------------------------------------------
+# SELEÇÃO DE ALIMENTOS
+# ---------------------------------------------------------------------------
+
+def _ordenar_por_preferencia(alimentos: list, preferidos: list, evitados: list, grupo: str = None) -> list:
+    """Ordena colocando alimentos preferidos primeiro e removendo indesejados.
+    Para grupos com papel macro (proteína/carboidrato/gordura), usa como
+    critério de desempate a maior densidade do nutriente-alvo por 100 g —
+    isso evita que um alimento de baixa densidade proteica (ex.: leguminosas,
+    ~5-9 g de proteína/100 g) seja escalado a porções irreais (300-400 g)
+    só para tentar atingir a meta de proteína de uma refeição."""
+    preferidos_lower = [p.strip().lower() for p in preferidos if p.strip()]
+    evitados_lower = [e.strip().lower() for e in evitados if e.strip()]
+
+    filtrados = [
+        a for a in alimentos
+        if not any(ev in a["nome"].lower() for ev in evitados_lower)
+    ]
+
+    campo_densidade = NUTRIENTE_ALVO_POR_GRUPO.get(grupo)
+
+    def chave(alimento):
+        nome = alimento["nome"].lower()
+        eh_preferido = any(pref in nome for pref in preferidos_lower)
+        densidade = -alimento.get(campo_densidade, 0) if campo_densidade else 0
+        return (0 if eh_preferido else 1, densidade, alimento["nome"])
+
+    return sorted(filtrados, key=chave)
+
+
+def _escolher_alimento(grupo: str, restricoes: list, preferidos: list,
+                       evitados: list, usados: set, contexto: str = None) -> dict:
+    """Seleciona o próximo alimento disponível de um grupo, evitando repetição
+    no mesmo dia e priorizando preferência/densidade do nutriente-alvo.
+    O contexto ("refeicao_principal" ou "lanche") restringe a escolha a
+    alimentos tradicionalmente adequados àquele tipo de refeição."""
+    candidatos = filtrar_alimentos(grupo, restricoes, contexto)
+    candidatos = _ordenar_por_preferencia(candidatos, preferidos, evitados, grupo)
+
+    if not candidatos:
+        # Relaxa primeiro o contexto, depois os "evitados", antes de desistir
+        candidatos = filtrar_alimentos(grupo, restricoes)
+        candidatos = _ordenar_por_preferencia(candidatos, preferidos, evitados, grupo)
+        if not candidatos:
+            return None
+
+    nao_usados = [a for a in candidatos if a["nome"] not in usados]
+    pool = nao_usados if nao_usados else candidatos
+
+    escolhido = pool[0]
+    usados.add(escolhido["nome"])
+    return escolhido
+
+
+def _macros_da_porcao(alimento: dict, gramas: float) -> dict:
+    fator = gramas / 100
+    return {
+        "kcal": round(alimento["kcal_100g"] * fator, 1),
+        "proteina": round(alimento["proteina_100g"] * fator, 1),
+        "carboidrato": round(alimento["carboidrato_100g"] * fator, 1),
+        "gordura": round(alimento["gordura_100g"] * fator, 1),
+    }
+
+
+def _calcular_porcao_por_kcal(alimento: dict, kcal_alvo: float) -> float:
+    if alimento["kcal_100g"] <= 0:
+        return alimento["porcao_base_g"]
+    gramas = (kcal_alvo / alimento["kcal_100g"]) * 100
+    gramas = max(10, min(gramas, 400))
+    return round(gramas / 5) * 5
+
+
+def gerar_alternativas(alimento: dict, restricoes: list, gramas_original: float,
+                       contexto: str = None, limite: int = 2) -> list:
+    """Gera até `limite` alternativas nutricionalmente equivalentes (mesmo
+    grupo alimentar e contexto de refeição, kcal/100g dentro de +-25%),
+    recalculando a porção equivalente. Retorna lista de (alimento_dict, gramas)."""
+    candidatos = filtrar_alimentos(alimento["grupo"], restricoes, contexto)
+    kcal_original_total = alimento["kcal_100g"] * (gramas_original / 100)
+
+    alternativas = []
+    for c in candidatos:
+        if c["nome"] == alimento["nome"]:
             continue
-        incompativel = any(r in alimento["restricoes_incompativeis"] for r in restricoes)
-        if incompativel:
-            continue
-        if contexto and contexto not in alimento.get("contextos", []):
-            continue
-        resultado.append(alimento)
-    return resultado
+        razao = c["kcal_100g"] / alimento["kcal_100g"] if alimento["kcal_100g"] else 1
+        if 0.75 <= razao <= 1.25:
+            gramas_eq = _calcular_porcao_por_kcal(c, kcal_original_total)
+            alternativas.append((c, gramas_eq))
+        if len(alternativas) >= limite:
+            break
+    return alternativas
+
+
+# ---------------------------------------------------------------------------
+# SISTEMA LINEAR DE PORÇÕES (macronutrientes)
+# ---------------------------------------------------------------------------
+
+def _resolver_porcoes_macro(alimentos_macro: list, alvo_vetor: dict) -> dict:
+    """Resolve, em conjunto, a porção (g) de cada alimento de papel macro
+    presente na refeição, de modo que a soma atinja as metas de proteína,
+    carboidrato e gordura simultaneamente. Retorna {grupo: gramas}."""
+    papeis = [grupo for grupo, _alimento in alimentos_macro]
+    n = len(papeis)
+    if n == 0:
+        return {}
+
+    A = np.zeros((n, n))
+    b = np.zeros(n)
+    for i, papel_i in enumerate(papeis):
+        campo = NUTRIENTE_ALVO_POR_GRUPO[papel_i]
+        b[i] = alvo_vetor[papel_i]
+        for j, (_papel_j, alimento_j) in enumerate(alimentos_macro):
+            A[i][j] = alimento_j.get(campo, 0) / 100.0
+
+    try:
+        x = np.linalg.solve(A, b)
+    except np.linalg.LinAlgError:
+        x = np.array([
+            (alvo_vetor[papeis[j]] / max(alimentos_macro[j][1].get(NUTRIENTE_ALVO_POR_GRUPO[papeis[j]], 0), 0.01)) * 100
+            if alimentos_macro[j][1].get(NUTRIENTE_ALVO_POR_GRUPO[papeis[j]], 0) > 0
+            else alimentos_macro[j][1]["porcao_base_g"]
+            for j in range(n)
+        ])
+
+    gramas_por_papel = {}
+    for j, papel_j in enumerate(papeis):
+        gramas = max(10.0, min(float(x[j]), 400.0))
+        gramas_por_papel[papel_j] = round(gramas / 5) * 5
+    return gramas_por_papel
+
+
+# ---------------------------------------------------------------------------
+# MONTAGEM DA REFEIÇÃO
+# ---------------------------------------------------------------------------
+
+def montar_refeicao(nome_refeicao: str, proteina_alvo_refeicao: float,
+                     carboidrato_alvo_refeicao: float, gordura_alvo_refeicao: float,
+                     restricoes: list, preferidos: list, evitados: list, usados: set) -> dict:
+    """Monta uma refeição completa organizada em seções (entrada/prato/
+    bebida/principal, conforme config.ESTRUTURA_REFEICAO). Cada item traz
+    a descrição já formatada em medida caseira + gramas, com alternativas
+    equivalentes unidas por 'ou'."""
+    estrutura = config.ESTRUTURA_REFEICAO.get(nome_refeicao, [("principal", "carboidrato"), ("principal", "proteina")])
+    contexto = "refeicao_principal" if nome_refeicao in ("Almoço", "Jantar") else "lanche"
+
+    metas_nutriente = {
+        "proteina": proteina_alvo_refeicao,
+        "carboidrato": carboidrato_alvo_refeicao,
+        "gordura": gordura_alvo_refeicao,
+    }
+
+    selecionados = []  # (secao, grupo, alimento)
+    for secao, grupo in estrutura:
+        alimento = _escolher_alimento(grupo, restricoes, preferidos, evitados, usados, contexto)
+        if alimento is not None:
+            selecionados.append((secao, grupo, alimento))
+
+    alimentos_macro = [(g, a) for _s, g, a in selecionados if g in NUTRIENTE_ALVO_POR_GRUPO]
+    gramas_macro = _resolver_porcoes_macro(alimentos_macro, metas_nutriente)
+
+    secoes = {}
+    total_kcal = total_proteina = total_carboidrato = total_gordura = 0.0
+
+    for secao, grupo, alimento in selecionados:
+        gramas = gramas_macro.get(grupo, alimento["porcao_base_g"])
+        macros = _macros_da_porcao(alimento, gramas)
+        alternativas = gerar_alternativas(alimento, restricoes, gramas, contexto)
+
+        partes_texto = [formatar_alimento(alimento, gramas)]
+        for alt_alimento, alt_gramas in alternativas:
+            partes_texto.append(formatar_alimento(alt_alimento, alt_gramas))
+        descricao = " ou ".join(partes_texto)
+
+        item = {
+            "grupo": grupo,
+            "nome": alimento["nome"],
+            "gramas": gramas,
+            "descricao": descricao,
+            "kcal": macros["kcal"],
+            "proteina": macros["proteina"],
+            "carboidrato": macros["carboidrato"],
+            "gordura": macros["gordura"],
+        }
+
+        secoes.setdefault(secao, []).append(item)
+
+        total_kcal += macros["kcal"]
+        total_proteina += macros["proteina"]
+        total_carboidrato += macros["carboidrato"]
+        total_gordura += macros["gordura"]
+
+    secoes_ordenadas = [
+        {"secao": s, "titulo": config.ROTULO_SECAO.get(s), "itens": secoes[s]}
+        for s in config.ORDEM_SECOES if s in secoes
+    ]
+
+    return {
+        "nome": nome_refeicao,
+        "secoes": secoes_ordenadas,
+        "totais": {
+            "kcal": round(total_kcal, 1),
+            "proteina": round(total_proteina, 1),
+            "carboidrato": round(total_carboidrato, 1),
+            "gordura": round(total_gordura, 1),
+        },
+    }
