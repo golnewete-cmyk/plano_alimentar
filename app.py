@@ -1,47 +1,18 @@
 """
 app.py
 Aplicação Streamlit única e exclusiva: formulário de dados do paciente
-seguido do botão "Gerar Plano Alimentar", que aciona o motor determinístico
-de geração automática do plano.
+(incluindo recordatório alimentar habitual e observações clínicas
+complementares) seguido do botão "Gerar Plano Alimentar", que aciona o
+motor determinístico de geração do plano e permite exportar o resultado
+em PDF no padrão visual de um documento clínico profissional.
 """
 
 import streamlit as st
-import streamlit_authenticator as stauth
-
-# --- CONFIGURAÇÃO DE AUTENTICAÇÃO ---
-# .to_dict() converte o secrets para um dicionário comum e editável
-credentials = st.secrets["credentials"].to_dict()
-
-authenticator = stauth.Authenticate(
-    credentials,
-    st.secrets["credentials"]["cookie"]["name"],
-    st.secrets["credentials"]["cookie"]["key"],
-    st.secrets["credentials"]["cookie"]["expiry_days"]
-)
-
-# Renderiza a tela de login
-authenticator.login()
-
-# Valida as credenciais
-if st.session_state["authentication_status"] is False:
-    st.error('Usuário ou senha incorretos.')
-    st.stop()
-
-elif st.session_state["authentication_status"] is None:
-    st.warning('Por favor, informe suas credenciais para continuar.')
-    st.stop()
-
-# Se autenticado com sucesso
-authenticator.logout('Sair / Logout', 'sidebar')
-st.sidebar.write(f'Bem-vinda, *{st.session_state["name"]}*!')
-
-# =========================================================================
-# O SEU CÓDIGO DO APP CONTINUA DAQUI PARA BAIXO NORMALMENTE
-# =========================================================================
 
 import config
 from assets.styles import get_css
 from engine.meal_plan_generator import gerar_plano_alimentar
+from engine.pdf_generator import gerar_pdf
 from utils.validators import validar_paciente
 
 st.set_page_config(page_title=config.APP_TITLE, page_icon=config.APP_ICON, layout="wide")
@@ -66,8 +37,33 @@ RESTRICOES_LABELS = {
     "sem_frutos_do_mar": "Sem frutos do mar",
 }
 
+# ---------------------------------------------------------------------------
+# DADOS DA NUTRICIONISTA (cabeçalho do PDF) — preenchidos uma vez, ficam
+# disponíveis para qualquer paciente gerado nesta sessão.
+# ---------------------------------------------------------------------------
+with st.sidebar:
+    st.subheader("🩺 Dados profissionais")
+    st.caption("Usados apenas no cabeçalho do PDF exportado.")
+    nutri_nome = st.text_input("Nome da nutricionista", value="")
+    nutri_especialidade = st.text_input("Especialidade", value=config.NUTRICIONISTA_PADRAO["especialidade"])
+    nutri_crn = st.text_input("CRN", value="")
+    nutri_telefone = st.text_input("Telefone / WhatsApp", value="")
+    nutri_email = st.text_input("E-mail", value="")
+    nutri_local = st.text_input("Local de atendimento", value="")
+
+nutricionista = {
+    "nome": nutri_nome,
+    "especialidade": nutri_especialidade,
+    "crn": nutri_crn,
+    "telefone": nutri_telefone,
+    "email": nutri_email,
+    "local_atendimento": nutri_local,
+}
+
 with st.form("form_paciente"):
     st.subheader("Dados do paciente")
+
+    nome_paciente = st.text_input("Nome do paciente (exibido no PDF)", placeholder="ex.: Maria da Silva")
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -119,6 +115,43 @@ with st.form("form_paciente"):
         placeholder="ex.: frango, batata-doce, banana",
     )
 
+    st.markdown("---")
+    st.subheader("Recordatório alimentar habitual")
+    st.caption(
+        "Registre aqui o que o paciente já costuma comer nos últimos dias. "
+        "Essa informação fica documentada no PDF como base do levantamento "
+        "clínico que fundamentou a construção deste novo plano."
+    )
+
+    col8, col9 = st.columns(2)
+    with col8:
+        habito_cafe = st.text_area(
+            "Café da manhã habitual", height=80,
+            placeholder="ex.: pão com manteiga, café com leite integral",
+        )
+        habito_almoco = st.text_area(
+            "Almoço habitual", height=80,
+            placeholder="ex.: arroz, feijão, bife acebolado, salada de alface e tomate",
+        )
+    with col9:
+        habito_lanche = st.text_area(
+            "Lanches habituais", height=80,
+            placeholder="ex.: bolacha recheada, salgados, refrigerante",
+        )
+        habito_jantar = st.text_area(
+            "Jantar habitual", height=80,
+            placeholder="ex.: sanduíche, macarrão instantâneo",
+        )
+
+    st.markdown("---")
+    st.subheader("Observações clínicas complementares")
+    observacoes_clinicas = st.text_area(
+        "Comorbidades, medicações em uso, exames laboratoriais relevantes, "
+        "rotina de sono, nível de estresse, prática de atividade física, etc.",
+        height=100,
+        placeholder="ex.: hipotireoidismo controlado, uso de levotiroxina, sono irregular (5h/noite)...",
+    )
+
     submitted = st.form_submit_button("🌿 GERAR PLANO ALIMENTAR")
 
 if submitted:
@@ -143,6 +176,14 @@ if submitted:
     else:
         plano = gerar_plano_alimentar(paciente)
         st.session_state["plano"] = plano
+        st.session_state["nome_paciente"] = nome_paciente
+        st.session_state["habitos_alimentares"] = {
+            "Café da manhã habitual": habito_cafe,
+            "Almoço habitual": habito_almoco,
+            "Lanches habituais": habito_lanche,
+            "Jantar habitual": habito_jantar,
+        }
+        st.session_state["observacoes_clinicas"] = observacoes_clinicas
 
 if "plano" in st.session_state:
     plano = st.session_state["plano"]
@@ -176,40 +217,66 @@ if "plano" in st.session_state:
     for msg in validacao["mensagens"]:
         st.caption(f"⚠ {msg}")
 
+    # ---- Botão de exportação em PDF --------------------------------------
+    pdf_bytes = gerar_pdf(
+        plano=plano,
+        nutricionista=nutricionista,
+        paciente_nome=st.session_state.get("nome_paciente", ""),
+        habitos_alimentares=st.session_state.get("habitos_alimentares"),
+        observacoes_clinicas=st.session_state.get("observacoes_clinicas"),
+    )
+    st.download_button(
+        "📄 Baixar plano alimentar em PDF",
+        data=pdf_bytes,
+        file_name="plano_alimentar.pdf",
+        mime="application/pdf",
+    )
+
     st.markdown("---")
     st.subheader("Plano alimentar do dia")
 
     for refeicao in plano["refeicoes"]:
-        itens_html = ""
-        for item in refeicao["itens"]:
-            subs = item["substituicoes"]
-            subs_html = ""
-            if subs:
-                partes = [f"{s['nome']} ({s['gramas']:.0f} g)" for s in subs]
-                subs_html = f'<div class="food-sub">Substituições equivalentes: {" | ".join(partes)}</div>'
-
-            itens_html += f"""
-            <div class="food-item">
-                <div class="food-name">{item['nome']} — {item['gramas']:.0f} g <span class="food-detail">({item['medida_caseira']})</span></div>
-                <div class="food-detail">{item['kcal']:.0f} kcal · P {item['proteina']:.1f} g · C {item['carboidrato']:.1f} g · G {item['gordura']:.1f} g</div>
-                {subs_html}
-            </div>
-            """
+        secoes_html = ""
+        for secao in refeicao["secoes"]:
+            titulo_html = f'<div class="secao-titulo">{secao["titulo"]}</div>' if secao["titulo"] else ""
+            itens_html = "".join(
+                f'<div class="food-item"><div class="food-name">{item["descricao"]}</div>'
+                f'<div class="food-detail">{item["kcal"]:.0f} kcal · P {item["proteina"]:.1f} g '
+                f'· C {item["carboidrato"]:.1f} g · G {item["gordura"]:.1f} g</div></div>'
+                for item in secao["itens"]
+            )
+            secoes_html += titulo_html + itens_html
 
         st.markdown(
             f"""
             <div class="card">
-                <div class="card-meal-title">{refeicao['nome']}</div>
+                <div class="card-meal-title">{refeicao['horario']} · {refeicao['nome']}</div>
                 <div class="food-detail">Meta: {refeicao['kcal_alvo']:.0f} kcal · Total real: {refeicao['totais']['kcal']:.0f} kcal</div>
-                {itens_html}
+                {secoes_html}
             </div>
             """,
             unsafe_allow_html=True,
         )
 
     st.markdown("---")
+    st.subheader("Recomendações")
+    rec = plano["recomendacoes"]
+    st.markdown(
+        f"""
+        <div class="card">
+            <div class="card-meal-title">Ingestão de água entre as refeições</div>
+            <div class="food-detail">Entre {rec['agua_min_l']:.1f} e {rec['agua_max_l']:.1f} litros por dia</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    for tip in rec["outras"]:
+        st.markdown(f"- {tip}")
+
+    st.markdown("---")
     st.caption(
         "Metodologia: Gasto energético basal por Mifflin-St Jeor (1990); fator de "
         "atividade FAO/OMS/UNU (2001); ajuste calórico e proteína por objetivo segundo "
-        "ISSN Position Stand (Aragon et al., 2017); lipídios conforme DRI/IOM (2005)."
+        "ISSN Position Stand (Aragon et al., 2017); lipídios conforme DRI/IOM (2005); "
+        "ingestão hídrica de referência de 30-35 mL/kg/dia."
     )

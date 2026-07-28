@@ -301,11 +301,38 @@ FOODS = [
      "restricoes_incompativeis": [], "tags": ["vegano", "vegetariano"]},
 ]
 
+# ---------------------------------------------------------------------------
+# CONTEXTO DE USO: em quais tipos de refeição cada alimento é
+# tradicionalmente adequado. Evita, por exemplo, que aveia em flocos ou
+# castanhas (tipicamente de café da manhã/lanche) sejam escaladas a
+# porções grandes para compor o prato principal do almoço/jantar, e que
+# arroz/batata sejam usados como "lanche". Proteínas, vegetais, frutas e
+# bebidas são adequados em qualquer contexto.
+_CARBOIDRATOS_SO_LANCHE = {"pão integral", "pão francês", "aveia em flocos", "tapioca (goma hidratada)"}
+_CARBOIDRATOS_AMBOS = {"batata-doce cozida", "quinoa cozida", "cuscuz de milho cozido"}
+_GORDURAS_SO_LANCHE = {"castanha-do-pará", "amêndoas", "pasta de amendoim integral", "semente de chia"}
+_GORDURAS_AMBOS = {"azeite de oliva extravirgem", "abacate"}
 
-def filtrar_alimentos(grupo: str, restricoes: list) -> list:
+for _alimento in FOODS:
+    if _alimento["grupo"] in ("proteina", "vegetal", "fruta", "bebida"):
+        _alimento["contextos"] = ["refeicao_principal", "lanche"]
+    elif _alimento["nome"] in _CARBOIDRATOS_SO_LANCHE:
+        _alimento["contextos"] = ["lanche"]
+    elif _alimento["nome"] in _CARBOIDRATOS_AMBOS or _alimento["nome"] in _GORDURAS_AMBOS:
+        _alimento["contextos"] = ["refeicao_principal", "lanche"]
+    elif _alimento["nome"] in _GORDURAS_SO_LANCHE:
+        _alimento["contextos"] = ["lanche"]
+    else:
+        # demais carboidratos (arroz, batata inglesa, mandioca, macarrão) e
+        # a gordura não listada acima -> refeição principal
+        _alimento["contextos"] = ["refeicao_principal"]
+
+
+def filtrar_alimentos(grupo: str, restricoes: list, contexto: str = None) -> list:
     """
     Retorna todos os alimentos de um determinado grupo que sejam
-    compatíveis com a lista de restrições do paciente.
+    compatíveis com a lista de restrições do paciente e, se informado,
+    com o contexto da refeição ("refeicao_principal" ou "lanche").
     """
     resultado = []
     for alimento in FOODS:
@@ -313,6 +340,8 @@ def filtrar_alimentos(grupo: str, restricoes: list) -> list:
             continue
         incompativel = any(r in alimento["restricoes_incompativeis"] for r in restricoes)
         if incompativel:
+            continue
+        if contexto and contexto not in alimento.get("contextos", []):
             continue
         resultado.append(alimento)
     return resultado
