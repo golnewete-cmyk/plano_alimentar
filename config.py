@@ -138,16 +138,107 @@ TEMPLATES_REFEICOES = {
     ],
 }
 
-# Estrutura de grupos de alimentos usada em cada refeição (define quais
-# categorias devem compor cada tipo de refeição para garantir equilíbrio
-# nutricional e variedade)
+# Estrutura de cada refeição: lista de (seção, grupo_alimentar).
+# Refeições principais (Almoço/Jantar) seguem o padrão clínico tradicional
+# em 3 blocos - ENTRADA (saladas/vegetais), PRATO (carboidrato + proteína +
+# gordura de preparo) e BEBIDA (suco) - tal como estruturado na prática
+# clínica de referência fornecida. Lanches e café da manhã permanecem como
+# lista única ("principal"), sem subseções, por serem refeições mais simples.
+# Repetir o mesmo grupo duas vezes (ex.: "vegetal" na entrada) faz o
+# algoritmo selecionar dois alimentos distintos daquele grupo automaticamente.
 ESTRUTURA_REFEICAO = {
-    "Café da manhã": ["carboidrato", "proteina", "fruta", "gordura"],
-    "Lanche da manhã": ["fruta", "proteina"],
-    "Lanche da tarde": ["fruta", "proteina", "carboidrato"],
-    "Almoço": ["carboidrato", "proteina", "vegetal", "gordura"],
-    "Jantar": ["carboidrato", "proteina", "vegetal", "gordura"],
-    "Ceia": ["proteina", "fruta"],
+    "Café da manhã": [
+        ("principal", "carboidrato"),
+        ("principal", "proteina"),
+        ("principal", "fruta"),
+        ("principal", "gordura"),
+    ],
+    "Lanche da manhã": [
+        ("principal", "fruta"),
+        ("principal", "proteina"),
+    ],
+    "Lanche da tarde": [
+        ("principal", "fruta"),
+        ("principal", "proteina"),
+        ("principal", "carboidrato"),
+    ],
+    "Almoço": [
+        ("entrada", "vegetal"),
+        ("entrada", "vegetal"),
+        ("prato", "carboidrato"),
+        ("prato", "proteina"),
+        ("prato", "gordura"),
+        ("bebida", "bebida"),
+    ],
+    "Jantar": [
+        ("entrada", "vegetal"),
+        ("entrada", "vegetal"),
+        ("prato", "carboidrato"),
+        ("prato", "proteina"),
+        ("prato", "gordura"),
+        ("bebida", "bebida"),
+    ],
+    "Ceia": [
+        ("principal", "proteina"),
+        ("principal", "fruta"),
+    ],
+}
+
+# Ordem e rótulos de exibição das seções dentro de uma refeição
+ORDEM_SECOES = ["principal", "entrada", "prato", "bebida"]
+ROTULO_SECAO = {
+    "principal": None,   # sem subtítulo — lista direta dos alimentos
+    "entrada": "ENTRADA",
+    "prato": "PRATO",
+    "bebida": "BEBIDA",
+}
+
+# Grupos que recebem porção fixa de referência (não entram no sistema
+# linear de macronutrientes nem na calibração fina de porções) — seu papel
+# nutricional é fibra, micronutrientes ou hidratação/acompanhamento, não
+# macronutriente principal.
+GRUPOS_PORCAO_FIXA = ("vegetal", "bebida")
+
+# Horário sugerido de cada refeição, por número de refeições do dia
+HORARIOS_REFEICOES = {
+    3: {"Café da manhã": "07:30", "Almoço": "12:30", "Jantar": "20:00"},
+    4: {"Café da manhã": "07:30", "Almoço": "12:30", "Lanche da tarde": "16:30", "Jantar": "20:00"},
+    5: {"Café da manhã": "07:00", "Lanche da manhã": "10:00", "Almoço": "12:30",
+        "Lanche da tarde": "16:30", "Jantar": "20:00"},
+    6: {"Café da manhã": "07:00", "Lanche da manhã": "10:00", "Almoço": "12:30",
+        "Lanche da tarde": "16:30", "Jantar": "20:00", "Ceia": "22:00"},
+}
+
+# ---------------------------------------------------------------------------
+# RECOMENDAÇÕES CLÍNICAS PADRÃO
+# ---------------------------------------------------------------------------
+# Ingestão hídrica: 30-35 mL/kg/dia é a faixa consolidada para adultos
+# saudáveis (European Food Safety Authority / Institute of Medicine), usada
+# aqui para sugerir uma faixa de referência de litros/dia.
+AGUA_ML_KG_MIN = 30
+AGUA_ML_KG_MAX = 35
+
+RECOMENDACOES_GERAIS = [
+    "Mastigar bem os alimentos e comer devagar, com atenção plena à refeição.",
+    "Evitar líquidos durante as refeições; se possível, aguardar cerca de 30 minutos antes ou depois de comer.",
+    "Registrar as refeições realizadas e eventuais desconfortos gastrointestinais em um diário alimentar.",
+    "Priorizar o preparo dos alimentos grelhado, cozido, assado ou refogado, evitando frituras no dia a dia.",
+    "Respeitar os horários sugeridos das refeições, ajustando-os à rotina pessoal sempre que necessário.",
+]
+
+RECOMENDACOES_POR_OBJETIVO = {
+    "emagrecimento": "Evitar repetir pratos e servir as porções já no tamanho definido no plano, evitando 'comer na panela'.",
+    "manutencao": "Manter a regularidade dos horários das refeições para preservar o equilíbrio energético alcançado.",
+    "hipertrofia": "Não pular refeições, especialmente as fontes proteicas, para sustentar a síntese proteica muscular ao longo do dia.",
+}
+
+RECOMENDACOES_POR_RESTRICAO = {
+    "sem_lactose": "Verificar sempre o rótulo dos alimentos industrializados quanto à presença de leite ou derivados ocultos.",
+    "sem_gluten": "Verificar sempre o rótulo dos alimentos industrializados quanto à presença de trigo, cevada, centeio ou aveia contaminada cruzadamente.",
+    "vegano": "Considerar acompanhamento da suplementação de vitamina B12, que não está presente em fontes vegetais.",
+    "vegetariano": "Combinar leguminosas (feijão, lentilha, grão-de-bico) com cereais ao longo do dia para melhorar a qualidade proteica.",
+    "sem_ovo": "Verificar sempre o rótulo de produtos de panificação e massas quanto à presença de ovo.",
+    "sem_frutos_do_mar": "Verificar sempre o rótulo de temperos e caldos industrializados quanto à presença de extrato de frutos do mar.",
 }
 
 # Restrições alimentares suportadas
@@ -159,3 +250,16 @@ RESTRICOES_DISPONIVEIS = [
     "sem_ovo",
     "sem_frutos_do_mar",
 ]
+
+# Campos de identificação profissional exibidos no cabeçalho do PDF.
+# Ficam vazios por padrão: cada nutricionista preenche os próprios dados
+# no formulário antes de gerar o PDF (nenhuma marca ou identidade de
+# terceiros é utilizada pelo sistema).
+NUTRICIONISTA_PADRAO = {
+    "nome": "",
+    "especialidade": "Nutrição Clínica",
+    "crn": "",
+    "telefone": "",
+    "email": "",
+    "local_atendimento": "",
+}
