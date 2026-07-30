@@ -73,6 +73,32 @@ h1, h2, h3 {{
     border-color: {c['gold']};
 }}
 
+/* Campos de texto, número e área de texto: fundo e texto explícitos para
+   garantir contraste e legibilidade (evita texto "invisível" quando o
+   navegador aplica fundo claro por padrão sobre o tema escuro do app). */
+.stTextInput input,
+.stTextArea textarea,
+.stNumberInput input {{
+    background-color: {c['bg_card']} !important;
+    color: {c['text_primary']} !important;
+    border: 1px solid {c['border']} !important;
+    border-radius: 6px !important;
+}}
+.stTextInput input::placeholder,
+.stTextArea textarea::placeholder {{
+    color: {c['text_secondary']} !important;
+    opacity: 1 !important;
+}}
+.stSelectbox [data-baseweb="select"] > div,
+.stMultiSelect [data-baseweb="select"] > div {{
+    background-color: {c['bg_card']} !important;
+    color: {c['text_primary']} !important;
+    border-color: {c['border']} !important;
+}}
+label, .stMarkdown, .stCaption {{
+    color: {c['text_primary']} !important;
+}}
+
 .card {{
     background: {c['bg_card']};
     border: 1px solid {c['border']};
@@ -88,6 +114,16 @@ h1, h2, h3 {{
     margin-bottom: 0.2rem;
     border-bottom: 1px solid {c['border']};
     padding-bottom: 0.4rem;
+}}
+
+.secao-titulo {{
+    color: {c['green_olive']};
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 0.6rem;
+    margin-bottom: 0.2rem;
 }}
 
 .food-item {{

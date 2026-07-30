@@ -10,26 +10,28 @@ Regras de decisão implementadas:
 1) Cada refeição possui uma "estrutura" (config.ESTRUTURA_REFEICAO) que
    define, por seção (entrada/prato/bebida/principal), quais grupos
    alimentares devem compor aquela refeição.
-2) Alimentos de papel macro (carboidrato/proteína/gordura) têm a porção
-   conjunta de todos os itens da refeição resolvida por um sistema linear,
-   de modo a atingir simultaneamente as metas de proteína, carboidrato e
-   gordura da refeição (evitando dupla contagem de macronutrientes entre
-   alimentos, ex.: feijão contribuindo tanto proteína quanto carboidrato).
+2) Cada alimento de papel macro (carboidrato/proteína/gordura) tem sua
+   porção calculada de forma INDEPENDENTE, a partir da meta do nutriente
+   que ele representa na refeição, e sempre dentro de uma faixa realista
+   em torno da porção de referência do próprio alimento (entre 40% e 200%
+   dela, 150% para gorduras). Isso evita o problema de um sistema
+   "resolvido em conjunto" zerar um alimento (ex.: quase nada de arroz)
+   para compensar outro (ex.: excesso de feijão) só para bater a meta
+   exata — o que gera combinações irreais. Pequenos desvios do total do
+   dia são corrigidos depois pela calibração fina do plano.
 3) Vegetais e bebidas (config.GRUPOS_PORCAO_FIXA) recebem porção fixa de
    referência — seu papel nutricional é fibra/micronutrientes/hidratação,
    não macronutriente principal.
 4) A seleção do alimento específico dentro de cada grupo é determinística:
-   respeita restrições alimentares, prioriza alimentos da lista de
-   preferências do paciente e, para grupos de papel macro, prioriza maior
-   densidade do nutriente-alvo; evita repetir o mesmo alimento no mesmo dia.
+   respeita restrições alimentares (inclusive termos genéricos como
+   "peixe", "carne", "laticínios", "leguminosas", "glúten" — não apenas o
+   nome exato do alimento), prioriza alimentos da lista de preferências do
+   paciente e, para grupos de papel macro, prioriza maior densidade do
+   nutriente-alvo; evita repetir o mesmo alimento no mesmo dia.
 5) Para cada alimento escolhido, o sistema gera até 2 opções alternativas
-   nutricionalmente equivalentes (mesmo grupo, kcal/100g dentro de +-25%),
-   compostas na mesma linha unidas por "ou", como na prática clínica de
-   referência (ex.: "2 fatias de pão de forma (50 g) ou 1 unidade de pão
-   francês (50 g)").
+   nutricionalmente equivalentes (mesmo grupo, mesmo contexto de refeição,
+   kcal/100g dentro de +-25%), compostas na mesma linha unidas por "ou".
 """
-
-import numpy as np
 
 import config
 from database.foods_data import filtrar_alimentos
@@ -38,6 +40,44 @@ NUTRIENTE_ALVO_POR_GRUPO = {
     "carboidrato": "carboidrato_100g",
     "proteina": "proteina_100g",
     "gordura": "gordura_100g",
+}
+
+# Faixa de porção aceitável, como múltiplo da porção de referência de cada
+# alimento (porcao_base_g). Gorduras usam teto mais baixo pois são densas
+# em energia e porções grandes não são clinicamente usuais.
+FAIXA_MULTIPLICADOR = {
+    "carboidrato": (0.4, 2.0),
+    "proteina": (0.4, 2.0),
+    "gordura": (0.4, 1.5),
+}
+
+# Termos genéricos comumente usados por pacientes/nutricionistas para
+# descrever categorias inteiras de alimentos a evitar, mapeados para os
+# alimentos específicos do banco que pertencem a cada categoria. Isso
+# garante que escrever apenas "peixe" já exclua tilápia e atum, sem
+# precisar digitar o nome exato de cada preparação.
+SINONIMOS_EVITAR = {
+    "peixe": ["tilápia", "atum"],
+    "peixes": ["tilápia", "atum"],
+    "frutos do mar": ["tilápia", "atum"],
+    "carne": ["patinho"],
+    "carne vermelha": ["patinho"],
+    "carne bovina": ["patinho"],
+    "boi": ["patinho"],
+    "frango": ["frango"],
+    "aves": ["frango"],
+    "galinha": ["frango"],
+    "ovo": ["ovo"],
+    "ovos": ["ovo"],
+    "leite": ["leite", "iogurte", "queijo", "whey"],
+    "laticinio": ["iogurte", "queijo", "whey"],
+    "laticinios": ["iogurte", "queijo", "whey"],
+    "laticínios": ["iogurte", "queijo", "whey"],
+    "leguminosa": ["feijão", "lentilha", "grão-de-bico"],
+    "leguminosas": ["feijão", "lentilha", "grão-de-bico"],
+    "feijao": ["feijão"],
+    "gluten": ["pão", "macarrão"],
+    "glúten": ["pão", "macarrão"],
 }
 
 
@@ -70,19 +110,31 @@ def formatar_alimento(alimento: dict, gramas: float) -> str:
 # SELEÇÃO DE ALIMENTOS
 # ---------------------------------------------------------------------------
 
+def _termo_bate(evitado_termo: str, nome_alimento: str) -> bool:
+    """Verifica se um termo informado pelo paciente/nutricionista (ex.:
+    'peixe', 'carne', 'laticínios') deve excluir um alimento do banco,
+    seja por correspondência direta no nome, seja por pertencer à
+    categoria genérica mapeada em SINONIMOS_EVITAR."""
+    if evitado_termo in nome_alimento:
+        return True
+    substitutos = SINONIMOS_EVITAR.get(evitado_termo)
+    if substitutos and any(sub in nome_alimento for sub in substitutos):
+        return True
+    return False
+
+
 def _ordenar_por_preferencia(alimentos: list, preferidos: list, evitados: list, grupo: str = None) -> list:
-    """Ordena colocando alimentos preferidos primeiro e removendo indesejados.
-    Para grupos com papel macro (proteína/carboidrato/gordura), usa como
-    critério de desempate a maior densidade do nutriente-alvo por 100 g —
-    isso evita que um alimento de baixa densidade proteica (ex.: leguminosas,
-    ~5-9 g de proteína/100 g) seja escalado a porções irreais (300-400 g)
-    só para tentar atingir a meta de proteína de uma refeição."""
+    """Ordena colocando alimentos preferidos primeiro e removendo indesejados
+    (inclusive por termo genérico, ver _termo_bate). Para grupos com papel
+    macro (proteína/carboidrato/gordura), usa como critério de desempate a
+    maior densidade do nutriente-alvo por 100 g, priorizando fontes mais
+    eficientes para atingir a meta com uma porção realista."""
     preferidos_lower = [p.strip().lower() for p in preferidos if p.strip()]
     evitados_lower = [e.strip().lower() for e in evitados if e.strip()]
 
     filtrados = [
         a for a in alimentos
-        if not any(ev in a["nome"].lower() for ev in evitados_lower)
+        if not any(_termo_bate(ev, a["nome"].lower()) for ev in evitados_lower)
     ]
 
     campo_densidade = NUTRIENTE_ALVO_POR_GRUPO.get(grupo)
@@ -130,20 +182,54 @@ def _macros_da_porcao(alimento: dict, gramas: float) -> dict:
     }
 
 
-def _calcular_porcao_por_kcal(alimento: dict, kcal_alvo: float) -> float:
+def _faixa_porcao(alimento: dict, grupo: str) -> tuple:
+    base = alimento["porcao_base_g"]
+    mult_min, mult_max = FAIXA_MULTIPLICADOR.get(grupo, (0.4, 2.0))
+    return base * mult_min, base * mult_max
+
+
+def _calcular_porcao_por_nutriente(alimento: dict, grupo: str, alvo_g: float) -> float:
+    """Calcula a porção (g) de um alimento a partir da meta do nutriente que
+    ele representa na refeição (proteína/carboidrato/gordura), sempre
+    dentro de uma faixa realista em torno da porção de referência do
+    próprio alimento — evita tanto porções irrisórias quanto exageradas."""
+    campo = NUTRIENTE_ALVO_POR_GRUPO.get(grupo)
+    minimo, maximo = _faixa_porcao(alimento, grupo)
+
+    if not campo:
+        return alimento["porcao_base_g"]
+
+    densidade = alimento.get(campo, 0)
+    if densidade <= 0:
+        gramas = alimento["porcao_base_g"]
+    else:
+        gramas = (alvo_g / densidade) * 100
+
+    gramas = max(minimo, min(gramas, maximo))
+    return round(gramas / 5) * 5
+
+
+def _calcular_porcao_por_kcal(alimento: dict, kcal_alvo: float, grupo: str = None) -> float:
     if alimento["kcal_100g"] <= 0:
         return alimento["porcao_base_g"]
     gramas = (kcal_alvo / alimento["kcal_100g"]) * 100
-    gramas = max(10, min(gramas, 400))
+    minimo, maximo = _faixa_porcao(alimento, grupo) if grupo else (10, 400)
+    gramas = max(minimo, min(gramas, maximo))
     return round(gramas / 5) * 5
 
 
 def gerar_alternativas(alimento: dict, restricoes: list, gramas_original: float,
-                       contexto: str = None, limite: int = 2) -> list:
+                       contexto: str = None, evitados: list = None, limite: int = 2) -> list:
     """Gera até `limite` alternativas nutricionalmente equivalentes (mesmo
-    grupo alimentar e contexto de refeição, kcal/100g dentro de +-25%),
-    recalculando a porção equivalente. Retorna lista de (alimento_dict, gramas)."""
+    grupo alimentar e contexto de refeição, kcal/100g dentro de +-25%,
+    respeitando também os alimentos a evitar), recalculando a porção
+    equivalente. Retorna lista de (alimento_dict, gramas)."""
     candidatos = filtrar_alimentos(alimento["grupo"], restricoes, contexto)
+    evitados_lower = [e.strip().lower() for e in (evitados or []) if e.strip()]
+    candidatos = [
+        c for c in candidatos
+        if not any(_termo_bate(ev, c["nome"].lower()) for ev in evitados_lower)
+    ]
     kcal_original_total = alimento["kcal_100g"] * (gramas_original / 100)
 
     alternativas = []
@@ -152,49 +238,11 @@ def gerar_alternativas(alimento: dict, restricoes: list, gramas_original: float,
             continue
         razao = c["kcal_100g"] / alimento["kcal_100g"] if alimento["kcal_100g"] else 1
         if 0.75 <= razao <= 1.25:
-            gramas_eq = _calcular_porcao_por_kcal(c, kcal_original_total)
+            gramas_eq = _calcular_porcao_por_kcal(c, kcal_original_total, alimento["grupo"])
             alternativas.append((c, gramas_eq))
         if len(alternativas) >= limite:
             break
     return alternativas
-
-
-# ---------------------------------------------------------------------------
-# SISTEMA LINEAR DE PORÇÕES (macronutrientes)
-# ---------------------------------------------------------------------------
-
-def _resolver_porcoes_macro(alimentos_macro: list, alvo_vetor: dict) -> dict:
-    """Resolve, em conjunto, a porção (g) de cada alimento de papel macro
-    presente na refeição, de modo que a soma atinja as metas de proteína,
-    carboidrato e gordura simultaneamente. Retorna {grupo: gramas}."""
-    papeis = [grupo for grupo, _alimento in alimentos_macro]
-    n = len(papeis)
-    if n == 0:
-        return {}
-
-    A = np.zeros((n, n))
-    b = np.zeros(n)
-    for i, papel_i in enumerate(papeis):
-        campo = NUTRIENTE_ALVO_POR_GRUPO[papel_i]
-        b[i] = alvo_vetor[papel_i]
-        for j, (_papel_j, alimento_j) in enumerate(alimentos_macro):
-            A[i][j] = alimento_j.get(campo, 0) / 100.0
-
-    try:
-        x = np.linalg.solve(A, b)
-    except np.linalg.LinAlgError:
-        x = np.array([
-            (alvo_vetor[papeis[j]] / max(alimentos_macro[j][1].get(NUTRIENTE_ALVO_POR_GRUPO[papeis[j]], 0), 0.01)) * 100
-            if alimentos_macro[j][1].get(NUTRIENTE_ALVO_POR_GRUPO[papeis[j]], 0) > 0
-            else alimentos_macro[j][1]["porcao_base_g"]
-            for j in range(n)
-        ])
-
-    gramas_por_papel = {}
-    for j, papel_j in enumerate(papeis):
-        gramas = max(10.0, min(float(x[j]), 400.0))
-        gramas_por_papel[papel_j] = round(gramas / 5) * 5
-    return gramas_por_papel
 
 
 # ---------------------------------------------------------------------------
@@ -217,22 +265,21 @@ def montar_refeicao(nome_refeicao: str, proteina_alvo_refeicao: float,
         "gordura": gordura_alvo_refeicao,
     }
 
-    selecionados = []  # (secao, grupo, alimento)
-    for secao, grupo in estrutura:
-        alimento = _escolher_alimento(grupo, restricoes, preferidos, evitados, usados, contexto)
-        if alimento is not None:
-            selecionados.append((secao, grupo, alimento))
-
-    alimentos_macro = [(g, a) for _s, g, a in selecionados if g in NUTRIENTE_ALVO_POR_GRUPO]
-    gramas_macro = _resolver_porcoes_macro(alimentos_macro, metas_nutriente)
-
     secoes = {}
     total_kcal = total_proteina = total_carboidrato = total_gordura = 0.0
 
-    for secao, grupo, alimento in selecionados:
-        gramas = gramas_macro.get(grupo, alimento["porcao_base_g"])
+    for secao, grupo in estrutura:
+        alimento = _escolher_alimento(grupo, restricoes, preferidos, evitados, usados, contexto)
+        if alimento is None:
+            continue
+
+        if grupo in NUTRIENTE_ALVO_POR_GRUPO:
+            gramas = _calcular_porcao_por_nutriente(alimento, grupo, metas_nutriente[grupo])
+        else:
+            gramas = alimento["porcao_base_g"]
+
         macros = _macros_da_porcao(alimento, gramas)
-        alternativas = gerar_alternativas(alimento, restricoes, gramas, contexto)
+        alternativas = gerar_alternativas(alimento, restricoes, gramas, contexto, evitados)
 
         partes_texto = [formatar_alimento(alimento, gramas)]
         for alt_alimento, alt_gramas in alternativas:

@@ -305,16 +305,27 @@ FOODS = [
 # CONTEXTO DE USO: em quais tipos de refeição cada alimento é
 # tradicionalmente adequado. Evita, por exemplo, que aveia em flocos ou
 # castanhas (tipicamente de café da manhã/lanche) sejam escaladas a
-# porções grandes para compor o prato principal do almoço/jantar, e que
-# arroz/batata sejam usados como "lanche". Proteínas, vegetais, frutas e
-# bebidas são adequados em qualquer contexto.
+# porções grandes para compor o prato principal do almoço/jantar, que
+# arroz/batata sejam usados como "lanche", que leguminosas (feijão,
+# lentilha, grão-de-bico) apareçam em lanches, ou que laticínios/whey
+# (tipicamente de café da manhã/lanche) apareçam como prato principal do
+# almoço/jantar.
 _CARBOIDRATOS_SO_LANCHE = {"pão integral", "pão francês", "aveia em flocos", "tapioca (goma hidratada)"}
 _CARBOIDRATOS_AMBOS = {"batata-doce cozida", "quinoa cozida", "cuscuz de milho cozido"}
 _GORDURAS_SO_LANCHE = {"castanha-do-pará", "amêndoas", "pasta de amendoim integral", "semente de chia"}
 _GORDURAS_AMBOS = {"azeite de oliva extravirgem", "abacate"}
+_PROTEINAS_SO_REFEICAO_PRINCIPAL = {"grão-de-bico cozido", "lentilha cozida", "feijão-preto cozido"}
+_PROTEINAS_SO_LANCHE = {"iogurte natural desnatado", "queijo cottage", "whey protein (isolado)"}
 
 for _alimento in FOODS:
-    if _alimento["grupo"] in ("proteina", "vegetal", "fruta", "bebida"):
+    if _alimento["grupo"] == "proteina":
+        if _alimento["nome"] in _PROTEINAS_SO_REFEICAO_PRINCIPAL:
+            _alimento["contextos"] = ["refeicao_principal"]
+        elif _alimento["nome"] in _PROTEINAS_SO_LANCHE:
+            _alimento["contextos"] = ["lanche"]
+        else:
+            _alimento["contextos"] = ["refeicao_principal", "lanche"]
+    elif _alimento["grupo"] in ("vegetal", "fruta", "bebida"):
         _alimento["contextos"] = ["refeicao_principal", "lanche"]
     elif _alimento["nome"] in _CARBOIDRATOS_SO_LANCHE:
         _alimento["contextos"] = ["lanche"]
